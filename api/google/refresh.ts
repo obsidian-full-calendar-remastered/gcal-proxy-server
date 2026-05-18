@@ -1,6 +1,7 @@
 // In api/google/refresh.ts
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { trackUmami } from '../../lib/umami';
 
 export default async function handler(
   request: VercelRequest,
@@ -15,10 +16,13 @@ export default async function handler(
     return response.status(200).end();
   }
 
+  
   if (request.method !== 'POST') {
     return response.status(405).json({ error: 'Method Not Allowed' });
   }
-
+  
+  trackUmami(request, 'google_refresh', '/api/google/refresh', { provider: 'google' });
+  
   const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } = process.env;
 
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {

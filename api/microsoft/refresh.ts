@@ -1,6 +1,7 @@
 // In api/microsoft/refresh.ts
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { trackUmami } from '../../lib/umami';
 
 export default async function handler(
   request: VercelRequest,
@@ -18,6 +19,9 @@ export default async function handler(
   if (request.method !== 'POST') {
     return response.status(405).json({ error: 'Method Not Allowed' });
   }
+
+  // Track only real POST calls (not OPTIONS preflights)
+  trackUmami(request, 'microsoft_refresh', '/api/microsoft/refresh', { provider: 'microsoft' });
 
   const { MICROSOFT_CLIENT_ID } = process.env;
 

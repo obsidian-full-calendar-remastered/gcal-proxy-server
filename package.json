@@ -17,5 +17,12 @@
   "bugs": {
     "url": "https://github.com/YouFoundJK/gcal-proxy-server/issues"
   },
-  "homepage": "https://github.com/YouFoundJK/gcal-proxy-server#readme"
+  "homepage": "https://github.com/YouFoundJK/gcal-proxy-server#readme",
+  "dependencies": {
+    "@vercel/functions": "^3.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.0",
+    "@vercel/node": "^5.8.2"
+  }
 }

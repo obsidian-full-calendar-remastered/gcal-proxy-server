@@ -1,6 +1,7 @@
 // In api/google/token.ts
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { trackUmami } from '../../lib/umami';
 
 export default async function handler(
   request: VercelRequest,
@@ -20,6 +21,9 @@ export default async function handler(
   if (request.method !== 'POST') {
     return response.status(405).json({ error: 'Method Not Allowed' });
   }
+
+  // Track only real POST calls (not OPTIONS preflights)
+  trackUmami(request, 'google_token', '/api/google/token', { provider: 'google' });
 
   // 3. Retrieve secrets from environment variables
   const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } = process.env;

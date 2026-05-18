@@ -1,6 +1,7 @@
 // In api/microsoft/token.ts
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { trackUmami } from '../../lib/umami';
 
 export default async function handler(
   request: VercelRequest,
@@ -20,6 +21,9 @@ export default async function handler(
   if (request.method !== 'POST') {
     return response.status(405).json({ error: 'Method Not Allowed' });
   }
+
+  // Track only real POST calls (not OPTIONS preflights)
+  trackUmami(request, 'microsoft_token', '/api/microsoft/token', { provider: 'microsoft' });
 
   // 3. Retrieve Client ID (No Secret needed for SPA/PKCE flow in Entra ID)
   const { MICROSOFT_CLIENT_ID } = process.env;
