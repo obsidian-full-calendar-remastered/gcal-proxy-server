@@ -3,6 +3,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { trackUmami } from '../../lib/umami';
 
+const ALLOWED_REDIRECT_URIS = [
+  'http://127.0.0.1:42813/callback',
+  'http://localhost:42813/callback',
+  'https://obsidian-full-calendar-remastered.github.io/plugin-full-calendar/assets/meta/google-auth-callback.html'
+];
+
 export default async function handler(
   request: VercelRequest,
   response: VercelResponse,
@@ -33,7 +39,7 @@ export default async function handler(
   }
 
   // 4. Get the authorization code and verifier from the plugin's request body
-  const { code, code_verifier, state } = request.body;
+  const { code, code_verifier, state, redirect_uri } = request.body;
 
   if (!code || !code_verifier) {
     return response.status(400).json({ error: 'Bad Request: Missing code or code_verifier.' });
@@ -43,13 +49,18 @@ export default async function handler(
     // 5. Prepare the request to Google's token endpoint
     const tokenUrl = 'https://oauth2.googleapis.com/token';
     
+    const effectiveRedirectUri =
+      redirect_uri && ALLOWED_REDIRECT_URIS.includes(redirect_uri)
+        ? redirect_uri
+        : 'http://127.0.0.1:42813/callback';
+
     const body = new URLSearchParams({
-        client_id: GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
-        code: code,
-        code_verifier: code_verifier,
-        grant_type: 'authorization_code',
-        redirect_uri: `http://127.0.0.1:42813/callback`, // Must match what you configured in Google Cloud
+      client_id: GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
+      code: code,
+      code_verifier: code_verifier,
+      grant_type: 'authorization_code',
+      redirect_uri: effectiveRedirectUri,
     });
 
     // 6. Exchange the code for tokens by calling Google
