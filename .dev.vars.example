@@ -1,0 +1,12 @@
+# Google OAuth credentials
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+
+# Microsoft OAuth client ID (SPA/PKCE flow)
+MICROSOFT_CLIENT_ID=your-microsoft-client-id
+
+# Umami Analytics (optional)
+UMAMI_URL=https://your-umami-instance.com/api/send
+UMAMI_WEBSITE_ID=your-umami-website-id
+UMAMI_USER_SALT=your-random-salt-string
+UMAMI_DEBUG=0

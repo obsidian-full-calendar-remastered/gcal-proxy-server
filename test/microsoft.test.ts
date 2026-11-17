@@ -1,69 +1,54 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import msTokenHandler from '../api/microsoft/token';
-import msRefreshHandler from '../api/microsoft/refresh';
-import { createMockRequest, createMockResponse } from './helper';
+import app from '../src/index';
+import { mockEnv, createMockExecutionContext } from './helper';
 
 describe('Microsoft OAuth Endpoints', () => {
-  const originalEnv = { ...process.env };
+  let env = { ...mockEnv };
   const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
-    process.env = {
-      ...originalEnv,
-      MICROSOFT_CLIENT_ID: 'mock-ms-client-id',
-    };
+    env = { ...mockEnv };
   });
 
   afterEach(() => {
-    process.env = { ...originalEnv };
     globalThis.fetch = originalFetch;
   });
 
   describe('POST /api/microsoft/token', () => {
     test('handles OPTIONS preflight correctly', async () => {
-      const req = createMockRequest({ method: 'OPTIONS' });
-      const res = createMockResponse();
+      const res = await app.request('/api/microsoft/token', {
+        method: 'OPTIONS',
+      }, env, createMockExecutionContext());
 
-      await msTokenHandler(req, res);
-
-      assert.equal(res.statusCode, 200);
-      assert.equal(res.headers['access-control-allow-origin'], '*');
-      assert.equal(res.ended, true);
-    });
-
-    test('rejects non-POST with 405', async () => {
-      const req = createMockRequest({ method: 'GET' });
-      const res = createMockResponse();
-
-      await msTokenHandler(req, res);
-
-      assert.equal(res.statusCode, 405);
-      assert.deepEqual(res.jsonData, { error: 'Method Not Allowed' });
+      assert.equal(res.status, 204);
+      assert.equal(res.headers.get('access-control-allow-origin'), '*');
+      assert.ok(res.headers.get('access-control-allow-methods')?.includes('POST'));
     });
 
     test('returns 500 when MICROSOFT_CLIENT_ID is missing', async () => {
-      delete process.env.MICROSOFT_CLIENT_ID;
-      const req = createMockRequest({
+      const missingEnv = { ...env, MICROSOFT_CLIENT_ID: '' };
+      const res = await app.request('/api/microsoft/token', {
         method: 'POST',
-        body: { code: 'code', code_verifier: 'verifier' },
-      });
-      const res = createMockResponse();
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: 'code', code_verifier: 'verifier' }),
+      }, missingEnv, createMockExecutionContext());
 
-      await msTokenHandler(req, res);
-
-      assert.equal(res.statusCode, 500);
-      assert.match(res.jsonData.error, /Missing MICROSOFT_CLIENT_ID/);
+      assert.equal(res.status, 500);
+      const data: any = await res.json();
+      assert.match(data.error, /Missing MICROSOFT_CLIENT_ID/);
     });
 
     test('returns 400 when code or code_verifier is missing', async () => {
-      const req = createMockRequest({ method: 'POST', body: { code: 'code' } });
-      const res = createMockResponse();
+      const res = await app.request('/api/microsoft/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: 'code' }),
+      }, env, createMockExecutionContext());
 
-      await msTokenHandler(req, res);
-
-      assert.equal(res.statusCode, 400);
-      assert.match(res.jsonData.error, /Missing code or code_verifier/);
+      assert.equal(res.status, 400);
+      const data: any = await res.json();
+      assert.match(data.error, /Missing code or code_verifier/);
     });
 
     test('successfully exchanges code with Entra ID PKCE flow', async () => {
@@ -71,99 +56,112 @@ describe('Microsoft OAuth Endpoints', () => {
       let fetchBody = '';
 
       globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
-        fetchUrl = url.toString();
-        fetchBody = init?.body?.toString() || '';
-        return new Response(
-          JSON.stringify({
-            access_token: 'mock-ms-access-token',
-            refresh_token: 'mock-ms-refresh-token',
-            expires_in: 3600,
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        );
+        if (url.toString().includes('microsoftonline.com')) {
+          fetchUrl = url.toString();
+          fetchBody = init?.body?.toString() || '';
+          return new Response(
+            JSON.stringify({
+              access_token: 'mock-ms-access-token',
+              refresh_token: 'mock-ms-refresh-token',
+              expires_in: 3600,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response(null, { status: 200 });
       };
 
-      const req = createMockRequest({
+      const res = await app.request('/api/microsoft/token', {
         method: 'POST',
-        body: { code: 'ms-auth-code', code_verifier: 'ms-verifier' },
-      });
-      const res = createMockResponse();
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: 'ms-auth-code', code_verifier: 'ms-verifier' }),
+      }, env, createMockExecutionContext());
 
-      await msTokenHandler(req, res);
-
-      assert.equal(res.statusCode, 200);
+      assert.equal(res.status, 200);
       assert.equal(fetchUrl, 'https://login.microsoftonline.com/common/oauth2/v2.0/token');
       assert.ok(fetchBody.includes('client_id=mock-ms-client-id'));
       assert.ok(fetchBody.includes('code=ms-auth-code'));
       assert.ok(fetchBody.includes('code_verifier=ms-verifier'));
       assert.ok(fetchBody.includes('redirect_uri=http%3A%2F%2Flocalhost%3A42813%2Fcallback'));
-      assert.equal(res.jsonData.access_token, 'mock-ms-access-token');
-      assert.equal(res.jsonData.refresh_token, 'mock-ms-refresh-token');
+      const data: any = await res.json();
+      assert.equal(data.access_token, 'mock-ms-access-token');
+      assert.equal(data.refresh_token, 'mock-ms-refresh-token');
     });
 
-    test('handles upstream Microsoft error and returns status', async () => {
-      const originalConsoleError = console.error;
-      console.error = () => {};
-      try {
-        globalThis.fetch = async () => {
+    test('handles upstream Microsoft error correctly', async () => {
+      globalThis.fetch = async (url: string | URL | Request) => {
+        if (url.toString().includes('microsoftonline.com')) {
           return new Response(
-            JSON.stringify({ error: 'invalid_grant', error_description: 'Code expired' }),
+            JSON.stringify({
+              error: 'invalid_grant',
+              error_description: 'Code expired',
+            }),
             { status: 400, headers: { 'Content-Type': 'application/json' } }
           );
-        };
+        }
+        return new Response(null, { status: 200 });
+      };
 
-        const req = createMockRequest({
-          method: 'POST',
-          body: { code: 'bad-code', code_verifier: 'verifier' },
-        });
-        const res = createMockResponse();
+      const res = await app.request('/api/microsoft/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: 'bad-code', code_verifier: 'verifier' }),
+      }, env, createMockExecutionContext());
 
-        await msTokenHandler(req, res);
-
-        assert.equal(res.statusCode, 400);
-        assert.equal(res.jsonData.error, 'invalid_grant');
-      } finally {
-        console.error = originalConsoleError;
-      }
+      assert.equal(res.status, 400);
+      const data: any = await res.json();
+      assert.equal(data.error, 'invalid_grant');
     });
   });
 
   describe('POST /api/microsoft/refresh', () => {
-    test('returns 400 when refresh_token is missing', async () => {
-      const req = createMockRequest({ method: 'POST', body: {} });
-      const res = createMockResponse();
+    test('handles OPTIONS preflight correctly', async () => {
+      const res = await app.request('/api/microsoft/refresh', {
+        method: 'OPTIONS',
+      }, env, createMockExecutionContext());
 
-      await msRefreshHandler(req, res);
-
-      assert.equal(res.statusCode, 400);
-      assert.match(res.jsonData.error, /Missing refresh_token/);
+      assert.equal(res.status, 204);
     });
 
-    test('successfully refreshes Microsoft token', async () => {
+    test('returns 400 when refresh_token is missing', async () => {
+      const res = await app.request('/api/microsoft/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }, env, createMockExecutionContext());
+
+      assert.equal(res.status, 400);
+      const data: any = await res.json();
+      assert.match(data.error, /Missing refresh_token/);
+    });
+
+    test('successfully refreshes token with Microsoft', async () => {
       let fetchBody = '';
-      globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
-        fetchBody = init?.body?.toString() || '';
-        return new Response(
-          JSON.stringify({
-            access_token: 'new-ms-access-token',
-            refresh_token: 'new-ms-refresh-token',
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        );
+      globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
+        if (url.toString().includes('microsoftonline.com')) {
+          fetchBody = init?.body?.toString() || '';
+          return new Response(
+            JSON.stringify({
+              access_token: 'new-ms-access-token',
+              expires_in: 3600,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response(null, { status: 200 });
       };
 
-      const req = createMockRequest({
+      const res = await app.request('/api/microsoft/refresh', {
         method: 'POST',
-        body: { refresh_token: 'existing-ms-refresh-token' },
-      });
-      const res = createMockResponse();
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: 'stored-ms-refresh' }),
+      }, env, createMockExecutionContext());
 
-      await msRefreshHandler(req, res);
-
-      assert.equal(res.statusCode, 200);
+      assert.equal(res.status, 200);
       assert.ok(fetchBody.includes('grant_type=refresh_token'));
-      assert.ok(fetchBody.includes('refresh_token=existing-ms-refresh-token'));
-      assert.equal(res.jsonData.access_token, 'new-ms-access-token');
+      assert.ok(fetchBody.includes('refresh_token=stored-ms-refresh'));
+      const data: any = await res.json();
+      assert.equal(data.access_token, 'new-ms-access-token');
     });
   });
 });

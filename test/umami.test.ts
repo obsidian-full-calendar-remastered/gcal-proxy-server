@@ -1,46 +1,42 @@
-import { test, describe, beforeEach, afterEach } from 'node:test';
+import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { trackUmami } from '../lib/umami';
-import { createMockRequest } from './helper';
+import { Hono } from 'hono';
+import { trackUmami } from '../src/lib/umami';
+import type { Env } from '../src/types';
+import { mockEnv, createMockExecutionContext } from './helper';
 
 describe('Umami Telemetry', () => {
-  const originalEnv = { ...process.env };
   const originalFetch = globalThis.fetch;
 
-  beforeEach(() => {
-    process.env = { ...originalEnv };
-  });
-
   afterEach(() => {
-    process.env = { ...originalEnv };
     globalThis.fetch = originalFetch;
   });
 
   test('does nothing if UMAMI_URL or UMAMI_WEBSITE_ID is not set', async () => {
-    delete process.env.UMAMI_URL;
-    delete process.env.UMAMI_WEBSITE_ID;
-
     let fetchCalled = false;
     globalThis.fetch = async () => {
       fetchCalled = true;
       return new Response('{}');
     };
 
-    const req = createMockRequest({
-      method: 'POST',
-      url: '/api/google/token',
+    const app = new Hono<{ Bindings: Env }>();
+    app.post('/test', (c) => {
+      trackUmami(c, 'Test Event', '/api/google/token/success', { outcome: 'success' });
+      return c.text('ok');
     });
 
-    trackUmami(req, 'Test Event', '/api/google/token/success', { outcome: 'success' });
+    const emptyEnv = { ...mockEnv, UMAMI_URL: '', UMAMI_WEBSITE_ID: '' };
+    const ctx = createMockExecutionContext();
+
+    await app.request('https://proxy.example.com/test', {
+      method: 'POST',
+    }, emptyEnv, ctx);
+    await ctx.waitForAll();
 
     assert.equal(fetchCalled, false);
   });
 
   test('sends formatted pageview event when UMAMI configured', async () => {
-    process.env.UMAMI_URL = 'https://analytics.example.com/api/send';
-    process.env.UMAMI_WEBSITE_ID = 'test-website-uuid';
-    process.env.UMAMI_USER_SALT = 'super-secret-salt';
-
     let sentUrl = '';
     let sentOptions: any = null;
 
@@ -50,28 +46,31 @@ describe('Umami Telemetry', () => {
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     };
 
-    const req = createMockRequest({
+    const app = new Hono<{ Bindings: Env }>();
+    app.post('/test', (c) => {
+      trackUmami(c, 'Google Token (Initial) - Success', '/api/google/token/initial/success', {
+        provider: 'google',
+        flow: 'token_initial',
+        outcome: 'success',
+        http_status: 200,
+        subject_seed: 'refresh_token_abc_123',
+      });
+      return c.text('ok');
+    });
+
+    const ctx = createMockExecutionContext();
+    await app.request('https://proxy.example.com/test', {
       method: 'POST',
-      url: '/api/google/token',
       headers: {
         'user-agent': 'Obsidian/1.7.0',
-        'x-forwarded-for': '203.0.113.195, 10.0.0.1',
+        'cf-connecting-ip': '203.0.113.195',
         'accept-language': 'en-US,en;q=0.9',
         'referer': 'https://obsidian.md',
-        'x-forwarded-proto': 'https',
-        'host': 'proxy.example.com',
       },
-    });
+    }, mockEnv, ctx);
+    await ctx.waitForAll();
 
-    trackUmami(req, 'Google Token (Initial) - Success', '/api/google/token/initial/success', {
-      provider: 'google',
-      flow: 'token_initial',
-      outcome: 'success',
-      http_status: 200,
-      subject_seed: 'refresh_token_abc_123',
-    });
-
-    assert.equal(sentUrl, 'https://analytics.example.com/api/send');
+    assert.equal(sentUrl, 'https://umami.example.com/api/send');
     assert.ok(sentOptions);
     assert.equal(sentOptions.method, 'POST');
     assert.equal(sentOptions.headers['content-type'], 'application/json');
@@ -80,7 +79,7 @@ describe('Umami Telemetry', () => {
 
     const body = JSON.parse(sentOptions.body);
     assert.equal(body.type, 'event');
-    assert.equal(body.payload.website, 'test-website-uuid');
+    assert.equal(body.payload.website, 'mock-website-id');
     assert.equal(body.payload.url, '/api/google/token/initial/success');
     assert.equal(body.payload.title, 'Google Token (Initial) - Success');
     assert.equal(body.payload.ip, '203.0.113.195');
@@ -96,29 +95,30 @@ describe('Umami Telemetry', () => {
   });
 
   test('replaces bot/node user-agent with realistic Obsidian user agent', async () => {
-    process.env.UMAMI_URL = 'https://analytics.example.com/api/send';
-    process.env.UMAMI_WEBSITE_ID = 'test-website-uuid';
-
-    let capturedHeaders: any = null;
-    let capturedPayload: any = null;
+    let sentOptions: any = null;
 
     globalThis.fetch = async (_url: string | URL | Request, options?: RequestInit) => {
-      capturedHeaders = options?.headers;
-      capturedPayload = JSON.parse(options?.body as string).payload;
-      return new Response('{}');
+      sentOptions = options;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
     };
 
-    const req = createMockRequest({
-      method: 'POST',
-      url: '/api/microsoft/refresh',
-      headers: {
-        'user-agent': 'undici',
-      },
+    const app = new Hono<{ Bindings: Env }>();
+    app.post('/test', (c) => {
+      trackUmami(c, 'Google Token - Success', '/api/google/token/success', {});
+      return c.text('ok');
     });
 
-    trackUmami(req, 'Microsoft Refresh - Success', '/api/microsoft/refresh/success');
+    const ctx = createMockExecutionContext();
+    await app.request('https://proxy.example.com/test', {
+      method: 'POST',
+      headers: {
+        'user-agent': 'node-fetch/1.0 (undici)',
+      },
+    }, mockEnv, ctx);
+    await ctx.waitForAll();
 
-    assert.ok(capturedHeaders['user-agent'].includes('Obsidian/1.7.0'));
-    assert.ok(capturedPayload.userAgent.includes('Obsidian/1.7.0'));
+    const body = JSON.parse(sentOptions.body);
+    assert.match(body.payload.userAgent, /Electron/);
+    assert.match(sentOptions.headers['user-agent'], /Electron/);
   });
 });

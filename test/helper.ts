@@ -1,51 +1,24 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { Env } from '../src/types';
 
-export interface MockResponse extends VercelResponse {
-  statusCode: number;
-  headers: Record<string, string>;
-  jsonData: any;
-  ended: boolean;
-}
+export const mockEnv: Env = {
+  GOOGLE_CLIENT_ID: 'mock-google-client-id',
+  GOOGLE_CLIENT_SECRET: 'mock-google-client-secret',
+  MICROSOFT_CLIENT_ID: 'mock-ms-client-id',
+  UMAMI_URL: 'https://umami.example.com/api/send',
+  UMAMI_WEBSITE_ID: 'mock-website-id',
+  UMAMI_USER_SALT: 'mock-salt',
+};
 
-export function createMockRequest(options: {
-  method?: string;
-  url?: string;
-  headers?: Record<string, string | string[]>;
-  body?: any;
-  query?: Record<string, string>;
-} = {}): VercelRequest {
+export function createMockExecutionContext() {
+  const promises: Promise<any>[] = [];
   return {
-    method: options.method ?? 'POST',
-    url: options.url ?? '/',
-    headers: options.headers ?? {},
-    body: options.body ?? {},
-    query: options.query ?? {},
-  } as unknown as VercelRequest;
-}
-
-export function createMockResponse(): MockResponse {
-  const headers: Record<string, string> = {};
-  const res: any = {
-    statusCode: 200,
-    headers,
-    jsonData: undefined,
-    ended: false,
-    setHeader(key: string, value: string) {
-      headers[key.toLowerCase()] = value;
-      return res;
+    waitUntil(promise: Promise<any>) {
+      promises.push(promise);
     },
-    status(code: number) {
-      res.statusCode = code;
-      return res;
-    },
-    json(data: any) {
-      res.jsonData = data;
-      return res;
-    },
-    end() {
-      res.ended = true;
-      return res;
+    passThroughOnException() {},
+    props: {},
+    waitForAll() {
+      return Promise.all(promises);
     },
   };
-  return res as MockResponse;
 }
