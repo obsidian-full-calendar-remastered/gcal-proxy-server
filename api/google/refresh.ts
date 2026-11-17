@@ -21,8 +21,6 @@ export default async function handler(
     return response.status(405).json({ error: 'Method Not Allowed' });
   }
   
-  trackUmami(request, 'google_refresh', '/api/google/refresh', { provider: 'google' });
-  
   const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } = process.env;
 
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
@@ -54,17 +52,44 @@ export default async function handler(
       body: body,
     });
 
-    const tokenData = await googleResponse.json();
+    const tokenData = await googleResponse.json().catch(() => ({ error: 'invalid_json_response' }));
 
     if (!googleResponse.ok) {
+      const outcome = googleResponse.status === 429
+        ? 'rate_limited'
+        : (tokenData?.error === 'invalid_grant' ? 'invalid_grant' : 'upstream_error');
+
+      trackUmami(request, `Google Refresh - ${outcome}`, `/api/google/refresh/${outcome}`, {
+        provider: 'google',
+        flow: 'refresh',
+        outcome,
+        http_status: googleResponse.status,
+        subject_seed: refresh_token,
+      });
+
       return response.status(googleResponse.status).json(tokenData);
     }
     
     // Success! Send the new access token back to the Obsidian plugin
+    trackUmami(request, 'Google Refresh - Success', '/api/google/refresh/success', {
+      provider: 'google',
+      flow: 'refresh',
+      outcome: 'success',
+      http_status: 200,
+      subject_seed: refresh_token,
+    });
+
     return response.status(200).json(tokenData);
 
   } catch (error) {
     console.error("Error during token refresh:", error);
+    trackUmami(request, 'Google Refresh - Server Error', '/api/google/refresh/server_error', {
+      provider: 'google',
+      flow: 'refresh',
+      outcome: 'server_error',
+      http_status: 500,
+      subject_seed: refresh_token,
+    });
     return response.status(500).json({ error: 'Internal Server Error' });
   }
 }

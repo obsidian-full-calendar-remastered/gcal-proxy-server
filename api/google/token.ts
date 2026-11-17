@@ -28,8 +28,11 @@ export default async function handler(
     return response.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // Track only real POST calls (not OPTIONS preflights)
-  trackUmami(request, 'google_token', '/api/google/token', { provider: 'google' });
+  const isReconnect = Boolean(
+    request.body?.reconnect || request.query?.reconnect === '1' || request.query?.reconnect === 'true'
+  );
+  const flowSlug = isReconnect ? 'reconnect' : 'initial';
+  const flowTitle = isReconnect ? 'Reconnect' : 'Initial';
 
   // 3. Retrieve secrets from environment variables
   const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } = process.env;
@@ -72,18 +75,42 @@ export default async function handler(
       body: body,
     });
 
-    const tokenData = await googleResponse.json();
+    const tokenData = await googleResponse.json().catch(() => ({ error: 'invalid_json_response' }));
 
     if (!googleResponse.ok) {
-      // If Google returned an error, pass it along
+      const outcome = googleResponse.status === 429
+        ? 'rate_limited'
+        : (tokenData?.error === 'invalid_grant' ? 'invalid_grant' : 'upstream_error');
+
+      trackUmami(request, `Google Token (${flowTitle}) - ${outcome}`, `/api/google/token/${flowSlug}/${outcome}`, {
+        provider: 'google',
+        flow: `token_${flowSlug}`,
+        outcome,
+        http_status: googleResponse.status,
+      });
+
       return response.status(googleResponse.status).json(tokenData);
     }
     
     // 7. Success! Send the tokens back to the Obsidian plugin
+    trackUmami(request, `Google Token (${flowTitle}) - Success`, `/api/google/token/${flowSlug}/success`, {
+      provider: 'google',
+      flow: `token_${flowSlug}`,
+      outcome: 'success',
+      http_status: 200,
+      subject_seed: tokenData.refresh_token,
+    });
+
     return response.status(200).json(tokenData);
 
   } catch (error) {
     console.error("Error during token exchange:", error);
+    trackUmami(request, `Google Token (${flowTitle}) - Server Error`, `/api/google/token/${flowSlug}/server_error`, {
+      provider: 'google',
+      flow: `token_${flowSlug}`,
+      outcome: 'server_error',
+      http_status: 500,
+    });
     return response.status(500).json({ error: 'Internal Server Error' });
   }
 }

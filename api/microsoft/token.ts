@@ -22,8 +22,11 @@ export default async function handler(
     return response.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // Track only real POST calls (not OPTIONS preflights)
-  trackUmami(request, 'microsoft_token', '/api/microsoft/token', { provider: 'microsoft' });
+  const isReconnect = Boolean(
+    request.body?.reconnect || request.query?.reconnect === '1' || request.query?.reconnect === 'true'
+  );
+  const flowSlug = isReconnect ? 'reconnect' : 'initial';
+  const flowTitle = isReconnect ? 'Reconnect' : 'Initial';
 
   // 3. Retrieve Client ID (No Secret needed for SPA/PKCE flow in Entra ID)
   const { MICROSOFT_CLIENT_ID } = process.env;
@@ -61,18 +64,43 @@ export default async function handler(
       body: body,
     });
 
-    const tokenData = await msResponse.json();
+    const tokenData = await msResponse.json().catch(() => ({ error: 'invalid_json_response' }));
 
     if (!msResponse.ok) {
       console.error("Microsoft Token Error:", tokenData);
+      const outcome = msResponse.status === 429
+        ? 'rate_limited'
+        : (tokenData?.error === 'invalid_grant' ? 'invalid_grant' : 'upstream_error');
+
+      trackUmami(request, `Microsoft Token (${flowTitle}) - ${outcome}`, `/api/microsoft/token/${flowSlug}/${outcome}`, {
+        provider: 'microsoft',
+        flow: `token_${flowSlug}`,
+        outcome,
+        http_status: msResponse.status,
+      });
+
       return response.status(msResponse.status).json(tokenData);
     }
     
     // 7. Success! Send tokens to Obsidian
+    trackUmami(request, `Microsoft Token (${flowTitle}) - Success`, `/api/microsoft/token/${flowSlug}/success`, {
+      provider: 'microsoft',
+      flow: `token_${flowSlug}`,
+      outcome: 'success',
+      http_status: 200,
+      subject_seed: tokenData.refresh_token,
+    });
+
     return response.status(200).json(tokenData);
 
   } catch (error) {
     console.error("Error during token exchange:", error);
+    trackUmami(request, `Microsoft Token (${flowTitle}) - Server Error`, `/api/microsoft/token/${flowSlug}/server_error`, {
+      provider: 'microsoft',
+      flow: `token_${flowSlug}`,
+      outcome: 'server_error',
+      http_status: 500,
+    });
     return response.status(500).json({ error: 'Internal Server Error' });
   }
 }

@@ -20,9 +20,6 @@ export default async function handler(
     return response.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // Track only real POST calls (not OPTIONS preflights)
-  trackUmami(request, 'microsoft_refresh', '/api/microsoft/refresh', { provider: 'microsoft' });
-
   const { MICROSOFT_CLIENT_ID } = process.env;
 
   if (!MICROSOFT_CLIENT_ID) {
@@ -52,17 +49,44 @@ export default async function handler(
       body: body,
     });
 
-    const tokenData = await msResponse.json();
+    const tokenData = await msResponse.json().catch(() => ({ error: 'invalid_json_response' }));
 
     if (!msResponse.ok) {
       console.error("Microsoft Refresh Error:", tokenData);
+      const outcome = msResponse.status === 429
+        ? 'rate_limited'
+        : (tokenData?.error === 'invalid_grant' ? 'invalid_grant' : 'upstream_error');
+
+      trackUmami(request, `Microsoft Refresh - ${outcome}`, `/api/microsoft/refresh/${outcome}`, {
+        provider: 'microsoft',
+        flow: 'refresh',
+        outcome,
+        http_status: msResponse.status,
+        subject_seed: refresh_token,
+      });
+
       return response.status(msResponse.status).json(tokenData);
     }
     
+    trackUmami(request, 'Microsoft Refresh - Success', '/api/microsoft/refresh/success', {
+      provider: 'microsoft',
+      flow: 'refresh',
+      outcome: 'success',
+      http_status: 200,
+      subject_seed: refresh_token,
+    });
+
     return response.status(200).json(tokenData);
 
   } catch (error) {
     console.error("Error during token refresh:", error);
+    trackUmami(request, 'Microsoft Refresh - Server Error', '/api/microsoft/refresh/server_error', {
+      provider: 'microsoft',
+      flow: 'refresh',
+      outcome: 'server_error',
+      http_status: 500,
+      subject_seed: refresh_token,
+    });
     return response.status(500).json({ error: 'Internal Server Error' });
   }
 }
